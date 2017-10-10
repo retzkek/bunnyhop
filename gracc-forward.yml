@@ -39,6 +39,8 @@ origin:
     durable: true
     autoDelete: false
     exclusive: false
+  qos:
+    prefetchCount: 1
 # Destination RabbitMQ server settings
 destination:
     filter:

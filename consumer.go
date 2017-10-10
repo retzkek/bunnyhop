@@ -134,7 +134,15 @@ consumerLoop:
 		case r := <-c.confirm:
 			log.WithField("tag", r).Debug("consumer: sent ack")
 			cch.Ack(r, false)
+			// reset after successful send
+			c.ResetRetry()
 		case r := <-c.reject:
+			// throttle nacks since they're probably just coming right back
+			sleep := c.BackoffRetry()
+			log.Infof("consumer: record rejected, waiting %s to send back to origin", sleep)
+			ctx, cancel := context.WithTimeout(ctx, sleep)
+			<-ctx.Done()
+			cancel()
 			log.WithField("tag", r).Debug("consumer: sent nack")
 			cch.Nack(r, false, true)
 		case r := <-inbox:
