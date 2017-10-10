@@ -38,12 +38,13 @@ func startPublisher(ctx context.Context, outbox chan Message, wg *sync.WaitGroup
 		defer wg.Done()
 		for ctx.Err() == nil {
 			log.Info("starting publisher")
-			err := pub.Run(ctx, outbox)
 			retry := pub.BackoffRetry()
-			log.WithFields(log.Fields{
-				"retry":  retry.String(),
-				"reason": err.Error(),
-			}).Warning("publisher exited")
+			if err := pub.Run(ctx, outbox); err != nil {
+				log.WithFields(log.Fields{
+					"retry":  retry.String(),
+					"reason": err.Error(),
+				}).Warning("publisher exited")
+			}
 			select {
 			case <-ctx.Done():
 				log.Infof("stopping publisher: %s", ctx.Err())
@@ -90,7 +91,7 @@ func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
 		select {
 		case <-ctx.Done():
 			log.Infof("closing publisher: %s", ctx.Err())
-			return ctx.Err()
+			return nil
 		case cl := <-connClosing:
 			log.WithFields(log.Fields{
 				"code":             cl.Code,
@@ -129,7 +130,7 @@ func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
 			}
 		}
 	}
-	return fmt.Errorf("unexpected exit")
+	return nil
 }
 
 func setupPublisherExchange(cch *amqp.Channel) error {

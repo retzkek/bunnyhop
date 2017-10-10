@@ -38,12 +38,13 @@ func startConsumer(ctx context.Context, outbox chan Message, wg *sync.WaitGroup)
 		defer wg.Done()
 		for ctx.Err() == nil {
 			log.Info("starting consumer")
-			err := con.Run(ctx, outbox)
 			retry := con.BackoffRetry()
-			log.WithFields(log.Fields{
-				"retry":  retry.String(),
-				"reason": err.Error(),
-			}).Warning("consumer exited")
+			if err := con.Run(ctx, outbox); err != nil {
+				log.WithFields(log.Fields{
+					"retry":  retry.String(),
+					"reason": err.Error(),
+				}).Warning("consumer exited")
+			}
 			select {
 			case <-ctx.Done():
 				log.Infof("stopping consumer: %s", ctx.Err())
@@ -96,7 +97,7 @@ func (c *Consumer) Run(ctx context.Context, outbox chan Message) error {
 		select {
 		case <-ctx.Done():
 			log.Infof("closing consumer: %s", ctx.Err())
-			return ctx.Err()
+			return nil
 		case cl := <-connClosing:
 			log.WithFields(log.Fields{
 				"code":             cl.Code,
@@ -123,7 +124,7 @@ func (c *Consumer) Run(ctx context.Context, outbox chan Message) error {
 			r.Ack(false)
 		}
 	}
-	return fmt.Errorf("unexpected exit")
+	return nil
 }
 
 func setupConsumerQueue(cch *amqp.Channel) error {
