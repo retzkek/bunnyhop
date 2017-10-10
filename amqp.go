@@ -24,6 +24,8 @@ type Message struct {
 	ContentType     string // MIME content type
 	ContentEncoding string // MIME content encoding
 	Body            []byte
+	DeliveryTag     uint64
+	MessageId       string
 }
 
 func (m Message) String() string {
@@ -44,6 +46,7 @@ type ConnectionConfig struct {
 	MaxRetry          string
 	maxRetryDuration  time.Duration
 	lastRetryDuration time.Duration
+	PrefetchCount     int
 }
 
 // Check provided configuration, and replace null config values

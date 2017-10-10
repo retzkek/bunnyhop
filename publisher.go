@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,9 +15,14 @@ import (
 
 type Publisher struct {
 	ConnectionConfig
+	outbox       chan Message
+	confirm      chan uint64
+	reject       chan uint64
+	messages     map[uint64]uint64
+	messageCount uint64
 }
 
-func startPublisher(ctx context.Context, outbox chan Message, wg *sync.WaitGroup) error {
+func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message, confirm, reject chan uint64) error {
 	pub := Publisher{
 		ConnectionConfig: ConnectionConfig{
 			Host:       viper.GetString("destination.host"),
@@ -29,6 +35,10 @@ func startPublisher(ctx context.Context, outbox chan Message, wg *sync.WaitGroup
 			MinRetry:   viper.GetString("destination.minRetry"),
 			MaxRetry:   viper.GetString("destination.maxRetry"),
 		},
+		outbox:   outbox,
+		confirm:  confirm,
+		reject:   reject,
+		messages: make(map[uint64]uint64),
 	}
 	if err := pub.Check(); err != nil {
 		return err
@@ -39,7 +49,7 @@ func startPublisher(ctx context.Context, outbox chan Message, wg *sync.WaitGroup
 		for ctx.Err() == nil {
 			log.Info("starting publisher")
 			retry := pub.BackoffRetry()
-			if err := pub.Run(ctx, outbox); err != nil {
+			if err := pub.Run(ctx); err != nil {
 				log.WithFields(log.Fields{
 					"retry":  retry.String(),
 					"reason": err.Error(),
@@ -47,7 +57,7 @@ func startPublisher(ctx context.Context, outbox chan Message, wg *sync.WaitGroup
 			}
 			select {
 			case <-ctx.Done():
-				log.Infof("stopping publisher: %s", ctx.Err())
+				log.Infof("publisher stopped: %s", ctx.Err())
 				return
 			case <-time.After(retry):
 			}
@@ -56,7 +66,7 @@ func startPublisher(ctx context.Context, outbox chan Message, wg *sync.WaitGroup
 	return nil
 }
 
-func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
+func (p *Publisher) Run(ctx context.Context) error {
 	log.WithFields(log.Fields{
 		"user":  p.User,
 		"host":  p.Host,
@@ -79,6 +89,12 @@ func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
 	}
 	defer cch.Close()
 	chanClosing := cch.NotifyClose(make(chan *amqp.Error, 1))
+	returns := cch.NotifyReturn(make(chan amqp.Return))
+	if err = cch.Confirm(false); err != nil {
+		log.Debug(err)
+		return NewAMQPError("RabbitMQ channel could not be put into confirm mode")
+	}
+	confirms := cch.NotifyPublish(make(chan amqp.Confirmation))
 
 	if err := setupPublisherExchange(cch); err != nil {
 		return err
@@ -87,11 +103,12 @@ func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
 	// reset after successful connection
 	p.ResetRetry()
 
+publisherLoop:
 	for {
 		select {
 		case <-ctx.Done():
 			log.Infof("closing publisher: %s", ctx.Err())
-			return nil
+			break publisherLoop
 		case cl := <-connClosing:
 			log.WithFields(log.Fields{
 				"code":             cl.Code,
@@ -114,7 +131,37 @@ func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
 			} else {
 				log.Infof("publisher: TCP unblocked")
 			}
-		case r := <-outbox:
+		case r := <-returns:
+			log.WithFields(log.Fields{
+				"code":   r.ReplyCode,
+				"reason": r.ReplyText,
+				"id":     r.MessageId,
+			}).Warning("publisher: record returned")
+			tag, err := strconv.ParseUint(r.MessageId, 36, 64)
+			if err != nil {
+				log.Debug(err)
+			} else {
+				p.reject <- p.messages[tag]
+				delete(p.messages, tag)
+			}
+		case cf := <-confirms:
+			log.WithFields(log.Fields{
+				"tag": cf.DeliveryTag,
+				"ack": cf.Ack,
+			}).Debug("publisher: confirm")
+			originTag, found := p.messages[cf.DeliveryTag]
+			if found {
+				if cf.Ack {
+					p.confirm <- originTag
+				} else {
+					log.WithFields(log.Fields{
+						"tag": originTag,
+					}).Warning("publisher: got nack")
+					p.reject <- originTag
+					delete(p.messages, cf.DeliveryTag)
+				}
+			}
+		case r := <-p.outbox:
 			log.Debugf("publishing record")
 			if err := cch.Publish(
 				viper.GetString("destination.exchange.name"),
@@ -125,8 +172,14 @@ func (p *Publisher) Run(ctx context.Context, outbox chan Message) error {
 					ContentType:     r.ContentType,
 					ContentEncoding: r.ContentEncoding,
 					Body:            r.Body,
+					DeliveryMode:    2, // persistent
+					MessageId:       strconv.FormatUint(p.messageCount+1, 36),
 				}); err != nil {
 				log.Debug(err)
+				p.reject <- r.DeliveryTag
+			} else {
+				p.messageCount += 1
+				p.messages[p.messageCount] = r.DeliveryTag
 			}
 		}
 	}

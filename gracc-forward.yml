@@ -2,6 +2,9 @@
 app:
   log:
     level: debug
+  pprof:
+    enabled: false
+    address: localhost:6060
   metrics:
     publish:
       enabled: true

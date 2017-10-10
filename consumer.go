@@ -14,21 +14,28 @@ import (
 
 type Consumer struct {
 	ConnectionConfig
+	outbox  chan Message
+	confirm chan uint64
+	reject  chan uint64
 }
 
-func startConsumer(ctx context.Context, outbox chan Message, wg *sync.WaitGroup) error {
+func startConsumer(ctx context.Context, wg *sync.WaitGroup, outbox chan Message, confirm, reject chan uint64) error {
 	con := Consumer{
 		ConnectionConfig: ConnectionConfig{
-			Host:       viper.GetString("origin.host"),
-			Port:       viper.GetString("origin.port"),
-			Scheme:     viper.GetString("origin.scheme"),
-			Vhost:      viper.GetString("origin.vhost"),
-			User:       viper.GetString("origin.user"),
-			Password:   viper.GetString("origin.password"),
-			SkipVerify: viper.GetBool("origin.skipVerify"),
-			MinRetry:   viper.GetString("origin.minRetry"),
-			MaxRetry:   viper.GetString("origin.maxRetry"),
+			Host:          viper.GetString("origin.host"),
+			Port:          viper.GetString("origin.port"),
+			Scheme:        viper.GetString("origin.scheme"),
+			Vhost:         viper.GetString("origin.vhost"),
+			User:          viper.GetString("origin.user"),
+			Password:      viper.GetString("origin.password"),
+			SkipVerify:    viper.GetBool("origin.skipVerify"),
+			MinRetry:      viper.GetString("origin.minRetry"),
+			MaxRetry:      viper.GetString("origin.maxRetry"),
+			PrefetchCount: viper.GetInt("origin.qos.prefetchCount"),
 		},
+		outbox:  outbox,
+		confirm: confirm,
+		reject:  reject,
 	}
 	if err := con.Check(); err != nil {
 		return err
@@ -39,7 +46,7 @@ func startConsumer(ctx context.Context, outbox chan Message, wg *sync.WaitGroup)
 		for ctx.Err() == nil {
 			log.Info("starting consumer")
 			retry := con.BackoffRetry()
-			if err := con.Run(ctx, outbox); err != nil {
+			if err := con.Run(ctx); err != nil {
 				log.WithFields(log.Fields{
 					"retry":  retry.String(),
 					"reason": err.Error(),
@@ -47,7 +54,7 @@ func startConsumer(ctx context.Context, outbox chan Message, wg *sync.WaitGroup)
 			}
 			select {
 			case <-ctx.Done():
-				log.Infof("stopping consumer: %s", ctx.Err())
+				log.Infof("consumer stopped: %s", ctx.Err())
 				return
 			case <-time.After(retry):
 			}
@@ -56,7 +63,7 @@ func startConsumer(ctx context.Context, outbox chan Message, wg *sync.WaitGroup)
 	return nil
 }
 
-func (c *Consumer) Run(ctx context.Context, outbox chan Message) error {
+func (c *Consumer) Run(ctx context.Context) error {
 	log.WithFields(log.Fields{
 		"user":  c.User,
 		"host":  c.Host,
@@ -78,13 +85,22 @@ func (c *Consumer) Run(ctx context.Context, outbox chan Message) error {
 	}
 	defer cch.Close()
 	chanClosing := cch.NotifyClose(make(chan *amqp.Error, 1))
+	if err := cch.Qos(c.PrefetchCount, 0, false); err != nil {
+		log.Debug(err)
+		return NewAMQPError("unable to set RabbitMQ QoS settings")
+	}
 
 	if err := setupConsumerQueue(cch); err != nil {
 		return err
 	}
 
 	inbox, err := cch.Consume(viper.GetString("origin.queue.name"),
-		"", false, false, true, false, nil)
+		"",    // consumer
+		false, // autoAck
+		false, // exclusive
+		true,  // noLocal
+		false, // noWait
+		nil)
 	if err != nil {
 		log.Debug(err)
 		return NewAMQPError("unable to start consumer in origin RabbitMQ")
@@ -93,11 +109,12 @@ func (c *Consumer) Run(ctx context.Context, outbox chan Message) error {
 	// reset after successful connection
 	c.ResetRetry()
 
+consumerLoop:
 	for {
 		select {
 		case <-ctx.Done():
 			log.Infof("closing consumer: %s", ctx.Err())
-			return nil
+			break consumerLoop
 		case cl := <-connClosing:
 			log.WithFields(log.Fields{
 				"code":             cl.Code,
@@ -114,14 +131,27 @@ func (c *Consumer) Run(ctx context.Context, outbox chan Message) error {
 				"can-recover":      cl.Recover,
 			}).Debug("closing consumer: channel closed")
 			return NewAMQPError("channel closed")
+		case r := <-c.confirm:
+			log.WithField("tag", r).Debug("consumer: sent ack")
+			cch.Ack(r, false)
+		case r := <-c.reject:
+			log.WithField("tag", r).Debug("consumer: sent nack")
+			cch.Nack(r, false, true)
 		case r := <-inbox:
 			log.Debugf("got record %d", r.DeliveryTag)
-			outbox <- Message{
+			// outbox should block until the message can be sent
+			select {
+			case c.outbox <- Message{
 				ContentType:     r.ContentType,
 				ContentEncoding: r.ContentEncoding,
 				Body:            r.Body,
+				DeliveryTag:     r.DeliveryTag,
+			}:
+			case <-ctx.Done():
+				log.Warning("consumer: returning unsent record")
+				r.Nack(false, true)
+				break consumerLoop
 			}
-			r.Ack(false)
 		}
 	}
 	return nil
