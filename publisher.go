@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -13,6 +15,11 @@ import (
 	"github.com/streadway/amqp"
 )
 
+type Filter struct {
+	Field   string
+	Pattern string
+}
+
 type Publisher struct {
 	ConnectionConfig
 	outbox       chan Message
@@ -20,6 +27,7 @@ type Publisher struct {
 	reject       chan uint64
 	messages     map[uint64]uint64
 	messageCount uint64
+	filters      []Filter
 }
 
 func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message, confirm, reject chan uint64) error {
@@ -43,6 +51,10 @@ func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message
 	if err := pub.Check(); err != nil {
 		return err
 	}
+	if err := viper.UnmarshalKey("destination.filter", &pub.filters); err != nil {
+		return fmt.Errorf("error loading filters: %s", err.Error())
+	}
+	log.Debugf("loaded filters: %s", pub.filters)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -162,24 +174,30 @@ publisherLoop:
 				}
 			}
 		case r := <-p.outbox:
-			log.Debugf("publishing record")
-			if err := cch.Publish(
-				viper.GetString("destination.exchange.name"),
-				viper.GetString("destination.exchange.routingKey"),
-				true,  // mandatory
-				false, // immediate
-				amqp.Publishing{
-					ContentType:     r.ContentType,
-					ContentEncoding: r.ContentEncoding,
-					Body:            r.Body,
-					DeliveryMode:    2, // persistent
-					MessageId:       strconv.FormatUint(p.messageCount+1, 36),
-				}); err != nil {
-				log.Debug(err)
-				p.reject <- r.DeliveryTag
+			log.Debugf("publisher: got record: %s", string(r.Body))
+			if p.filterPass(r) {
+				log.Debug("publisher: publishing record")
+				if err := cch.Publish(
+					viper.GetString("destination.exchange.name"),
+					viper.GetString("destination.exchange.routingKey"),
+					true,  // mandatory
+					false, // immediate
+					amqp.Publishing{
+						ContentType:     r.ContentType,
+						ContentEncoding: r.ContentEncoding,
+						Body:            r.Body,
+						DeliveryMode:    2, // persistent
+						MessageId:       strconv.FormatUint(p.messageCount+1, 36),
+					}); err != nil {
+					log.Debug(err)
+					p.reject <- r.DeliveryTag
+				} else {
+					p.messageCount += 1
+					p.messages[p.messageCount] = r.DeliveryTag
+				}
 			} else {
-				p.messageCount += 1
-				p.messages[p.messageCount] = r.DeliveryTag
+				log.Debug("publisher: discarding record")
+				p.confirm <- r.DeliveryTag
 			}
 		}
 	}
@@ -207,4 +225,34 @@ func setupPublisherExchange(cch *amqp.Channel) error {
 		}
 	}
 	return nil
+}
+
+func (p *Publisher) filterPass(m Message) bool {
+	// short-circuit with empty filter list
+	if len(p.filters) == 0 {
+		return true
+	}
+	var r map[string]string
+	if err := json.Unmarshal(m.Body, &r); err != nil {
+		log.Debugf("error unmarshalling record: %s", err.Error())
+		log.Debug(r)
+		return false
+	}
+	for _, f := range p.filters {
+		val, found := r[f.Field]
+		if found {
+			if matched, err := regexp.MatchString(f.Pattern, val); matched && err == nil {
+				log.WithFields(log.Fields{
+					"field":   f.Field,
+					"val":     val,
+					"pattern": f.Pattern,
+				}).Debug("filter matched")
+				return true
+			} else if err != nil {
+				log.Errorf("error matching filter [%s=%s]: %s", f.Field, f.Pattern, err.Error())
+			}
+		}
+
+	}
+	return false
 }

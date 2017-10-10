@@ -43,8 +43,12 @@ origin:
     prefetchCount: 1
 # Destination RabbitMQ server settings
 destination:
-    filter:
-      ProbeName: .*
+    # empty filter list forwards all records
+    filter: []
+    # example filter:
+    # filter:
+    # - field: ProbeName
+    #   pattern: .*
     host: localhost
     port: 5672
     scheme: amqp
