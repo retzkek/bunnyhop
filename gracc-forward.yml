@@ -6,10 +6,11 @@ app:
     publish:
       enabled: true
       port: 80
+      timeout: 30s
     graphite:
       enabled: false
       url: localhost:2003
-      prefix: ""
+      prefix: "gracc-forward"
       interval: 1m
       timeout: 10s
 # Origin RabbitMQ server settings
@@ -34,7 +35,7 @@ origin:
     routingKey: "#"
     durable: true
     autoDelete: false
-    exclusive: true
+    exclusive: false
 # Destination RabbitMQ server settings
 destination:
     filter:
@@ -49,7 +50,7 @@ destination:
     minRetry: 1s
     maxRetry: 1h
     exchange:
-      name: amq.direct
+      name: "amq.direct"
       type: direct
       durable: true
       autoDelete: false

@@ -35,7 +35,7 @@ func init() {
 	viper.SetDefault("origin.exchange.internal", false)
 	viper.SetDefault("origin.queue.name", "gracc.forward")
 	viper.SetDefault("origin.queue.routingKey", "#")
-	viper.SetDefault("origin.queue.durable", true)
+	viper.SetDefault("origin.quPeue.durable", true)
 	viper.SetDefault("origin.queue.autoDelete", false)
 	viper.SetDefault("origin.queue.exclusive", true)
 
@@ -59,9 +59,10 @@ func init() {
 	viper.SetDefault("app.log.level", "debug")
 	viper.SetDefault("app.metrics.publish.enabled", true)
 	viper.SetDefault("app.metrics.publish.address", "localhost:8080")
+	viper.SetDefault("app.metrics.publish.timeout", "30s")
 	viper.SetDefault("app.metrics.graphite.enabled", true)
 	viper.SetDefault("app.metrics.graphite.url", "localhost:2003")
-	viper.SetDefault("app.metrics.graphite.prefix", "")
+	viper.SetDefault("app.metrics.graphite.prefix", "gracc-forward")
 	viper.SetDefault("app.metrics.graphite.interval", "1m")
 	viper.SetDefault("app.metrics.graphite.timeout", "10s")
 
@@ -91,10 +92,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// start monitoring
+	// wait group to track goroutines
+	var wg sync.WaitGroup
+
+	// monitoring
 	if viper.GetBool("app.metrics.publish.enabled") {
-		http.Handle("/metrics", promhttp.Handler())
-		go http.ListenAndServe(viper.GetString("app.metrics.publish.address"), nil)
+		if err := startMetricsServer(
+			ctx,
+			viper.GetString("app.metrics.publish.address"),
+			viper.GetString("app.metrics.publish.timeout"),
+			&wg,
+		); err != nil {
+			log.Fatal(err)
+		}
 	}
 	if viper.GetBool("app.metrics.graphite.enabled") {
 		if err := startGraphite(
@@ -103,118 +113,68 @@ func main() {
 			viper.GetString("app.metrics.graphite.prefix"),
 			viper.GetString("app.metrics.graphite.interval"),
 			viper.GetString("app.metrics.graphite.timeout"),
+			&wg,
 		); err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	var wg sync.WaitGroup
-	inbox, err := startConsumer(ctx, &wg)
-	if err != nil {
+	// clients
+	inbox := make(chan Message)
+	if err := startConsumer(ctx, inbox, &wg); err != nil {
+		log.Fatal(err)
+	}
+	if err := startPublisher(ctx, inbox, &wg); err != nil {
 		log.Fatal(err)
 	}
 
-	// start publisher
-	// TODO
-
-	// forward records
+	// run until exit signalled
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT)
 mainloop:
 	for {
 		select {
-		case r := <-inbox:
-			log.Debug(string(r))
-			// TODO
 		case s := <-signals:
 			log.WithField("signal", s).Debug("got signal")
 			switch s {
 			case syscall.SIGINT:
-				cancel()
-				wg.Wait()
+				log.Info("exiting (SIGINT)...")
 				break mainloop
 			}
 		}
-
 	}
+
+	cancel()
+	wg.Wait()
 }
 
-func startConsumer(ctx context.Context, wg *sync.WaitGroup) (chan []byte, error) {
-	outbox := make(chan []byte)
-	var err error
-	conn := Connection{
-		Host:       viper.GetString("origin.host"),
-		Port:       viper.GetString("origin.port"),
-		Scheme:     viper.GetString("origin.scheme"),
-		Vhost:      viper.GetString("origin.vhost"),
-		User:       viper.GetString("origin.user"),
-		Password:   viper.GetString("origin.password"),
-		SkipVerify: viper.GetBool("origin.skipVerify"),
-		MinRetry:   viper.GetString("origin.minRetry"),
-		MaxRetry:   viper.GetString("origin.maxRetry"),
-	}
-	if err := conn.Connect(ctx); err != nil {
-		log.Error("unable to connect to origin RabbitMQ")
-		return outbox, err
-	}
-	cch, err := conn.OpenChannel()
+func startMetricsServer(ctx context.Context, address, timeout string, wg *sync.WaitGroup) error {
+	timeoutd, err := time.ParseDuration(timeout)
 	if err != nil {
-		log.Error("unable to open channel to origin RabbitMQ")
-		return outbox, err
+		return fmt.Errorf("invalid metrics server timeout duration %s", timeout)
 	}
-	if err := cch.ExchangeDeclarePassive(
-		viper.GetString("origin.exchange.name"),
-		viper.GetString("origin.exchange.type"),
-		viper.GetBool("origin.exchange.durable"),
-		viper.GetBool("origin.exchange.autoDelete"),
-		viper.GetBool("origin.exchange.internal"),
-		false, nil); err != nil {
-		log.Errorf("exchange %s not found or not properly configured in origin RabbitMQ", viper.GetString("origin.exchange.name"))
-		return outbox, err
-	}
-	if _, err := cch.QueueDeclare(
-		viper.GetString("origin.queue.name"),
-		viper.GetBool("origin.queue.durable"),
-		viper.GetBool("origin.queue.autoDelete"),
-		viper.GetBool("origin.queue.exclusive"),
-		false, nil); err != nil {
-		log.Errorf("unable to declare queue in origin RabbitMQ")
-		return outbox, err
-	}
-	if err := cch.QueueBind(
-		viper.GetString("origin.queue.name"),
-		viper.GetString("origin.queue.routingKey"),
-		viper.GetString("origin.exchange.name"),
-		false, nil); err != nil {
-		log.Errorf("unable to bind queue in origin RabbitMQ")
-		return outbox, err
-	}
-	inbox, err := cch.Consume(viper.GetString("origin.queue.name"),
-		"", false, false, true, false, nil)
-	if err != nil {
-		log.Errorf("unable to start consumer in origin RabbitMQ")
-		return outbox, err
-	}
-	wg.Add(1)
+	metricSrv := &http.Server{Addr: address}
+	log.WithField("address", address).Info("starting metrics server")
+	http.Handle("/metrics", promhttp.Handler())
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				log.Infof("closing consumer: %s", ctx.Err())
-				cch.Close()
-				return
-			case r := <-inbox:
-				log.Debugf("got record %d", r.DeliveryTag)
-				outbox <- r.Body
-				r.Ack(false)
-			}
-		}
+		log.Debug(metricSrv.ListenAndServe())
 	}()
-	return outbox, nil
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		log.WithField("timeout", timeout).Info("stopping metrics server...")
+		ctx, _ := context.WithTimeout(context.Background(), timeoutd)
+		if err := metricSrv.Shutdown(ctx); err != nil {
+			log.Warningf("error when stopping metrics server: %s", err)
+		}
+		log.Info("metrics server stopped")
+	}()
+	return nil
 }
 
-func startGraphite(ctx context.Context, url, prefix, interval, timeout string) error {
+func startGraphite(ctx context.Context, url, prefix, interval, timeout string, wg *sync.WaitGroup) error {
 	intervald, err := time.ParseDuration(interval)
 	if err != nil {
 		return fmt.Errorf("invalid graphite interval: %s", intervald)
@@ -227,7 +187,7 @@ func startGraphite(ctx context.Context, url, prefix, interval, timeout string) e
 		"URL":      url,
 		"Prefix":   prefix,
 		"Interval": intervald,
-	}).Info("Starting graphite metrics.")
+	}).Info("starting graphite metrics")
 	b, err := graphite.NewBridge(&graphite.Config{
 		URL:           url,
 		Gatherer:      prometheus.DefaultGatherer,
@@ -247,6 +207,10 @@ func startGraphite(ctx context.Context, url, prefix, interval, timeout string) e
 	}
 
 	// Start pushing metrics to Graphite in the Run() loop.
-	go b.Run(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.Run(ctx)
+	}()
 	return nil
 }
