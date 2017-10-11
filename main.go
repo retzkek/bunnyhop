@@ -67,7 +67,7 @@ func init() {
 	viper.SetDefault("app.metrics.publish.enabled", true)
 	viper.SetDefault("app.metrics.publish.address", "localhost:8080")
 	viper.SetDefault("app.metrics.publish.timeout", "30s")
-	viper.SetDefault("app.metrics.graphite.enabled", true)
+	viper.SetDefault("app.metrics.graphite.enabled", false)
 	viper.SetDefault("app.metrics.graphite.url", "localhost:2003")
 	viper.SetDefault("app.metrics.graphite.prefix", "bunnyhop")
 	viper.SetDefault("app.metrics.graphite.interval", "1m")
