@@ -8,9 +8,36 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
 	"github.com/streadway/amqp"
 )
+
+var (
+	consumerStarts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "consumer_starts_total",
+		Help: "number of times consumer has been (re-)started",
+	})
+	consumerMessages = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "consumer_messages_total",
+		Help: "number of messages consumer has received",
+	})
+	consumerAcks = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "consumer_acks_total",
+		Help: "number of messages consumer has acknowledged",
+	})
+	consumerNacks = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "consumer_nacks_total",
+		Help: "number of messages consumer has rejected",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(consumerStarts)
+	prometheus.MustRegister(consumerMessages)
+	prometheus.MustRegister(consumerAcks)
+	prometheus.MustRegister(consumerNacks)
+}
 
 type Consumer struct {
 	ConnectionConfig
@@ -45,6 +72,7 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, outbox chan Message,
 		defer wg.Done()
 		for ctx.Err() == nil {
 			log.Info("starting consumer")
+			consumerStarts.Inc()
 			retry := con.BackoffRetry()
 			if err := con.Run(ctx); err != nil {
 				log.WithFields(log.Fields{
@@ -134,12 +162,14 @@ consumerLoop:
 		case r := <-c.confirm:
 			log.WithField("tag", r).Debug("consumer: sent ack")
 			cch.Ack(r, false)
+			consumerAcks.Inc()
 			// reset after successful send
 			c.ResetRetry()
 		case r := <-c.reject:
 			// throttle nacks since they're probably just coming right back
 			sleep := c.BackoffRetry()
 			log.Infof("consumer: record rejected, waiting %s to send back to origin", sleep)
+			consumerNacks.Inc()
 			ctx, cancel := context.WithTimeout(ctx, sleep)
 			<-ctx.Done()
 			cancel()
@@ -147,6 +177,7 @@ consumerLoop:
 			cch.Nack(r, false, true)
 		case r := <-inbox:
 			log.Debugf("got record %d", r.DeliveryTag)
+			consumerMessages.Inc()
 			// outbox should block until the message can be sent
 			select {
 			case c.outbox <- Message{

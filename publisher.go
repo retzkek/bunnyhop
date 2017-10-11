@@ -11,9 +11,44 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
 	"github.com/streadway/amqp"
 )
+
+var (
+	publisherStarts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "publisher_starts_total",
+		Help: "number of times publisher has been (re-)started",
+	})
+	publisherMessages = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "publisher_messages_total",
+			Help: "number of messages publisher has processed",
+		},
+		[]string{"filter"},
+	)
+	publisherAcks = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "publisher_acks_total",
+		Help: "number of messages broker has acknowledged",
+	})
+	publisherNacks = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "publisher_nacks_total",
+		Help: "number of messages broker has rejected",
+	})
+	publisherReturns = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "publisher_returns_total",
+		Help: "number of messages broker has returned",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(publisherStarts)
+	prometheus.MustRegister(publisherMessages)
+	prometheus.MustRegister(publisherAcks)
+	prometheus.MustRegister(publisherNacks)
+	prometheus.MustRegister(publisherReturns)
+}
 
 type Filter struct {
 	Field   string
@@ -60,6 +95,7 @@ func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message
 		defer wg.Done()
 		for ctx.Err() == nil {
 			log.Info("starting publisher")
+			publisherStarts.Inc()
 			retry := pub.BackoffRetry()
 			if err := pub.Run(ctx); err != nil {
 				log.WithFields(log.Fields{
@@ -149,6 +185,7 @@ publisherLoop:
 				"reason": r.ReplyText,
 				"id":     r.MessageId,
 			}).Warning("publisher: record returned")
+			publisherReturns.Inc()
 			tag, err := strconv.ParseUint(r.MessageId, 36, 64)
 			if err != nil {
 				log.Debug(err)
@@ -164,11 +201,13 @@ publisherLoop:
 			originTag, found := p.messages[cf.DeliveryTag]
 			if found {
 				if cf.Ack {
+					publisherAcks.Inc()
 					p.confirm <- originTag
 				} else {
 					log.WithFields(log.Fields{
 						"tag": originTag,
 					}).Warning("publisher: got nack")
+					publisherNacks.Inc()
 					p.reject <- originTag
 					delete(p.messages, cf.DeliveryTag)
 				}
@@ -177,6 +216,7 @@ publisherLoop:
 			log.Debugf("publisher: got record: %s", string(r.Body))
 			if p.filterPass(r) {
 				log.Debug("publisher: publishing record")
+				publisherMessages.With(prometheus.Labels{"filter": "pass"}).Inc()
 				if err := cch.Publish(
 					viper.GetString("destination.exchange.name"),
 					viper.GetString("destination.exchange.routingKey"),
@@ -197,6 +237,7 @@ publisherLoop:
 				}
 			} else {
 				log.Debug("publisher: discarding record")
+				publisherMessages.With(prometheus.Labels{"filter": "drop"}).Inc()
 				p.confirm <- r.DeliveryTag
 			}
 		}
