@@ -232,7 +232,7 @@ func (p *Publisher) filterPass(m Message) bool {
 	if len(p.filters) == 0 {
 		return true
 	}
-	var r map[string]string
+	var r map[string]interface{}
 	if err := json.Unmarshal(m.Body, &r); err != nil {
 		log.Debugf("error unmarshalling record: %s", err.Error())
 		log.Debug(r)
@@ -241,15 +241,24 @@ func (p *Publisher) filterPass(m Message) bool {
 	for _, f := range p.filters {
 		val, found := r[f.Field]
 		if found {
-			if matched, err := regexp.MatchString(f.Pattern, val); matched && err == nil {
+			var sval string
+			switch val.(type) {
+			case string:
+				sval = val.(string)
+			default:
+				log.Errorf("error matching filter: value of field %s is not a string", f.Field)
+				continue
+			}
+			if matched, err := regexp.MatchString(f.Pattern, sval); matched && err == nil {
 				log.WithFields(log.Fields{
 					"field":   f.Field,
-					"val":     val,
+					"val":     sval,
 					"pattern": f.Pattern,
 				}).Debug("filter matched")
 				return true
 			} else if err != nil {
 				log.Errorf("error matching filter [%s=%s]: %s", f.Field, f.Pattern, err.Error())
+				continue
 			}
 		}
 
