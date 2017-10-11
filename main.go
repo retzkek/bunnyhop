@@ -155,7 +155,7 @@ func main() {
 
 	// run until exit signalled
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 mainloop:
 	for {
 		select {
@@ -164,6 +164,9 @@ mainloop:
 			switch s {
 			case syscall.SIGINT:
 				log.Info("exiting (SIGINT)...")
+				break mainloop
+			case syscall.SIGTERM:
+				log.Info("exiting (SIGTERM)...")
 				break mainloop
 			}
 		}
