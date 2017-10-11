@@ -1,6 +1,6 @@
 # bunnyhop
 
-🐇.='''=.🐇
+˙·.🐇 .·˙˙˙·. 🐇.·˙
 
 bunnyhop is an AMQP 0.9.1 (e.g. RabbitMQ) message relay, that simply reads from
 a queue bound to an exchange in one broker and writes to an exchange in another.
