@@ -1,0 +1,100 @@
+# Example full config file.
+# All parameters have defaults.
+# Config can be in JSON, TOML, YAML, HCL, or Java properties formats.
+# Parameters can also be set by environment variable that is prefixed with "BH_", and
+# follows dot notation, except underscore-delimited and in all caps. e.g.:
+#   BH_APP_LOG_LEVEL=debug
+#   BH_ORIGIN_EXCHANGE_NAME=myexchange
+
+# General application settings
+app:
+  # application logging to stderr
+  log:
+    level: info # debug or info
+
+  # HTTP-based runtime profiling
+  # https://golang.org/pkg/net/http/pprof/
+  pprof:
+    enabled: false
+    address: localhost:6060
+
+  # application runtime metrics
+  metrics:
+    # serve via HTTP in Prometheus exposition format
+    # https://prometheus.io/docs/instrumenting/exposition_formats/
+    publish:
+      enabled: true
+      port: 80
+      timeout: 30s
+
+    # push to graphite
+    graphite:
+      enabled: false
+      url: localhost:2003
+      prefix: "bunnyhop"
+      interval: 1m
+      timeout: 10s
+
+# Origin RabbitMQ server settings
+origin:
+  host: localhost
+  port: 5672
+  scheme: amqp
+  vhost: ""
+  user: guest
+  password: guest
+  skipVerify: false
+  minRetry: 1s
+  maxRetry: 1h
+
+  # Exchange to bind to, error if it doesn't exist.
+  exchange:
+    name: amq.fanout
+    type: fanout
+    durable: true
+    autoDelete: false
+    internal: false
+
+  # Queue to consume from, will be declared and bound
+  # to the exchange with the given routing key.
+  queue:
+    name: bunnyhop
+    durable: true
+    autoDelete: false
+    exclusive: false
+    routingKey: "#"
+
+  # advanced consumer settings
+  qos:
+    # number of messages to have in-flight
+    prefetchCount: 1
+
+# Destination RabbitMQ server settings
+destination:
+    host: localhost
+    port: 5672
+    scheme: amqp
+    vhost: ""
+    user: guest
+    password: guest
+    skipVerify: false
+    minRetry: 1s
+    maxRetry: 1h
+
+    # Exchange to publish to., will be declared if it doesn't already exist.
+    exchange:
+      name: "amq.direct"
+      type: direct
+      durable: true
+      autoDelete: false
+      routingKey: "bunnyhop"
+
+    # Filter messages that are forwarded based on pattern
+    # matching on the value of top-level keys.
+    # A message that matches any filter will be forwarded (i.e. they are OR'd), 
+    # HOWEVER an empty filter list forwards all messages
+    # (and skips the overhead of unmarshaling the message from JSON).
+    filter: []
+    # filter:
+    # - field: ProbeName
+    #   pattern: .*

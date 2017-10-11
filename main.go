@@ -19,6 +19,11 @@ import (
 	"github.com/spf13/viper"
 )
 
+var (
+	VERSION = "0.1.0"
+	BUILD   = "scratch"
+)
+
 func init() {
 	viper.SetDefault("origin.host", "localhost")
 	viper.SetDefault("origin.port", "5672")
@@ -34,7 +39,7 @@ func init() {
 	viper.SetDefault("origin.exchange.durable", true)
 	viper.SetDefault("origin.exchange.autoDelete", false)
 	viper.SetDefault("origin.exchange.internal", false)
-	viper.SetDefault("origin.queue.name", "gracc.forward")
+	viper.SetDefault("origin.queue.name", "bunnyhop")
 	viper.SetDefault("origin.queue.routingKey", "#")
 	viper.SetDefault("origin.queue.durable", true)
 	viper.SetDefault("origin.queue.autoDelete", false)
@@ -56,28 +61,30 @@ func init() {
 	viper.SetDefault("destination.exchange.durable", true)
 	viper.SetDefault("destination.exchange.autoDelete", false)
 	viper.SetDefault("destination.exchange.internal", false)
-	viper.SetDefault("destination.exchange.routingKey", "gracc")
+	viper.SetDefault("destination.exchange.routingKey", "bunnyhop")
 
-	viper.SetDefault("app.log.level", "debug")
+	viper.SetDefault("app.log.level", "info")
 	viper.SetDefault("app.metrics.publish.enabled", true)
 	viper.SetDefault("app.metrics.publish.address", "localhost:8080")
 	viper.SetDefault("app.metrics.publish.timeout", "30s")
 	viper.SetDefault("app.metrics.graphite.enabled", true)
 	viper.SetDefault("app.metrics.graphite.url", "localhost:2003")
-	viper.SetDefault("app.metrics.graphite.prefix", "gracc-forward")
+	viper.SetDefault("app.metrics.graphite.prefix", "bunnyhop")
 	viper.SetDefault("app.metrics.graphite.interval", "1m")
 	viper.SetDefault("app.metrics.graphite.timeout", "10s")
 	viper.SetDefault("app.pprof.enabled", false)
 	viper.SetDefault("app.pprof.address", "localhost:6060")
 
-	viper.SetConfigName("gracc-forward")
+	viper.SetConfigName("bunnyhop")
 	viper.AddConfigPath(".")
+	viper.AddConfigPath("/etc")
+	viper.AddConfigPath("/etc/bunnyhop")
 	err := viper.ReadInConfig()
 	if err != nil {
 		panic(fmt.Errorf("Fatal error config file: %s \n", err))
 	}
 
-	viper.SetEnvPrefix("GRACC")
+	viper.SetEnvPrefix("BH")
 	replacer := strings.NewReplacer(".", "_")
 	viper.SetEnvKeyReplacer(replacer)
 	viper.AutomaticEnv()
@@ -91,6 +98,14 @@ func main() {
 	default:
 		log.SetLevel(log.InfoLevel)
 	}
+
+	log.WithFields(log.Fields{
+		"version": VERSION,
+		"build":   BUILD,
+	}).Info("Starting bunnyhop")
+	log.WithFields(log.Fields{
+		"file": viper.ConfigFileUsed(),
+	}).Info("loaded config")
 
 	// Global context
 	ctx, cancel := context.WithCancel(context.Background())
