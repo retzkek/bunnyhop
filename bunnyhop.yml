@@ -24,7 +24,7 @@ app:
     # https://prometheus.io/docs/instrumenting/exposition_formats/
     publish:
       enabled: true
-      port: 80
+      address: localhost:8080
       timeout: 30s
 
     # push to graphite
