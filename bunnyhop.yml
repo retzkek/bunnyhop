@@ -89,12 +89,18 @@ destination:
       autoDelete: false
       routingKey: "bunnyhop"
 
-    # Filter messages that are forwarded based on pattern
-    # matching on the value of top-level keys.
-    # A message that matches any filter will be forwarded (i.e. they are OR'd), 
-    # HOWEVER an empty filter list forwards all messages
-    # (and skips the overhead of unmarshaling the message from JSON).
-    filter: []
-    # filter:
-    # - field: ProbeName
-    #   pattern: .*
+# Filter messages that are forwarded based on pattern
+# matching on the value of top-level keys.
+# A message that matches any filter will be forwarded (i.e. they are OR'd), 
+# HOWEVER an empty filter list forwards all messages
+# (and skips the overhead of unmarshaling the message from JSON).
+#
+# The pattern uses RE2 syntax (https://github.com/google/re2/wiki/Syntax),
+# and will match any portion of the value, so be sure to anchor (^$) the
+# pattern if you want to match the whole value.
+#
+# Example: forward all messages that have a Name starting with "foo"
+#filters:
+#- field: Name
+#  pattern: ^foo
+filters: []

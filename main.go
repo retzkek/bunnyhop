@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	VERSION = "0.1.1"
+	VERSION = "0.1.2"
 	BUILD   = "scratch"
 )
 
@@ -46,7 +46,6 @@ func init() {
 	viper.SetDefault("origin.queue.exclusive", false)
 	viper.SetDefault("origin.qos.prefetchCount", 1)
 
-	viper.SetDefault("destination.filter", []Filter{})
 	viper.SetDefault("destination.host", "localhost")
 	viper.SetDefault("destination.port", "5672")
 	viper.SetDefault("destination.scheme", "amqp")
@@ -63,6 +62,8 @@ func init() {
 	viper.SetDefault("destination.exchange.internal", false)
 	viper.SetDefault("destination.exchange.routingKey", "bunnyhop")
 
+	viper.SetDefault("filters", []Filter{})
+
 	viper.SetDefault("app.log.level", "info")
 	viper.SetDefault("app.metrics.publish.enabled", true)
 	viper.SetDefault("app.metrics.publish.address", "localhost:8080")
@@ -74,6 +75,7 @@ func init() {
 	viper.SetDefault("app.metrics.graphite.timeout", "10s")
 	viper.SetDefault("app.pprof.enabled", false)
 	viper.SetDefault("app.pprof.address", "localhost:6060")
+	viper.SetDefault("destination.filter", []Filter{})
 
 	viper.SetConfigName("bunnyhop")
 	viper.AddConfigPath(".")

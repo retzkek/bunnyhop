@@ -51,7 +51,7 @@ func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message
 	if err := pub.Check(); err != nil {
 		return err
 	}
-	if err := viper.UnmarshalKey("destination.filter", &pub.filters); err != nil {
+	if err := viper.UnmarshalKey("filters", &pub.filters); err != nil {
 		return fmt.Errorf("error loading filters: %s", err.Error())
 	}
 	log.Debugf("loaded filters: %s", pub.filters)
