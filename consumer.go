@@ -15,20 +15,28 @@ import (
 
 var (
 	consumerStarts = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "consumer_starts_total",
-		Help: "number of times consumer has been (re-)started",
+		Namespace: "bunnyhop",
+		Subsystem: "consumer",
+		Name:      "starts_total",
+		Help:      "number of times consumer has been (re-)started",
 	})
 	consumerMessages = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "consumer_messages_total",
-		Help: "number of messages consumer has received",
+		Namespace: "bunnyhop",
+		Subsystem: "consumer",
+		Name:      "messages_total",
+		Help:      "number of messages consumer has received",
 	})
 	consumerAcks = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "consumer_acks_total",
-		Help: "number of messages consumer has acknowledged",
+		Namespace: "bunnyhop",
+		Subsystem: "consumer",
+		Name:      "acks_total",
+		Help:      "number of messages consumer has acknowledged",
 	})
 	consumerNacks = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "consumer_nacks_total",
-		Help: "number of messages consumer has rejected",
+		Namespace: "bunnyhop",
+		Subsystem: "consumer",
+		Name:      "nacks_total",
+		Help:      "number of messages consumer has rejected",
 	})
 )
 

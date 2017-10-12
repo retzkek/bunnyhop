@@ -4,7 +4,22 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+var (
+	amqpErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "bunnyhop",
+		Subsystem: "amqp",
+		Name:      "errors_total",
+		Help:      "number of AMQP errors",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(amqpErrors)
+}
 
 // AMQPError represents an error communicating with the AMQP broker.
 type AMQPError struct {
@@ -12,6 +27,7 @@ type AMQPError struct {
 }
 
 func NewAMQPError(msg string) AMQPError {
+	amqpErrors.Inc()
 	return AMQPError{Message: msg}
 }
 

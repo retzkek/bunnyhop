@@ -18,27 +18,37 @@ import (
 
 var (
 	publisherStarts = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "publisher_starts_total",
-		Help: "number of times publisher has been (re-)started",
+		Namespace: "bunnyhop",
+		Subsystem: "publisher",
+		Name:      "starts_total",
+		Help:      "number of times publisher has been (re-)started",
 	})
 	publisherMessages = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "publisher_messages_total",
-			Help: "number of messages publisher has processed",
+			Namespace: "bunnyhop",
+			Subsystem: "publisher",
+			Name:      "messages_total",
+			Help:      "number of messages publisher has processed",
 		},
 		[]string{"filter"},
 	)
 	publisherAcks = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "publisher_acks_total",
-		Help: "number of messages broker has acknowledged",
+		Namespace: "bunnyhop",
+		Subsystem: "publisher",
+		Name:      "acks_total",
+		Help:      "number of messages broker has acknowledged",
 	})
 	publisherNacks = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "publisher_nacks_total",
-		Help: "number of messages broker has rejected",
+		Namespace: "bunnyhop",
+		Subsystem: "publisher",
+		Name:      "nacks_total",
+		Help:      "number of messages broker has rejected",
 	})
 	publisherReturns = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "publisher_returns_total",
-		Help: "number of messages broker has returned",
+		Namespace: "bunnyhop",
+		Subsystem: "publisher",
+		Name:      "returns_total",
+		Help:      "number of messages broker has returned",
 	})
 )
 
@@ -163,7 +173,7 @@ publisherLoop:
 				"reason":           cl.Reason,
 				"server-initiated": cl.Server,
 				"can-recover":      cl.Recover,
-			}).Debug("closing consumer: connection closed")
+			}).Debug("closing publisher: connection closed")
 			return NewAMQPError("connection closed")
 		case cl := <-chanClosing:
 			log.WithFields(log.Fields{
