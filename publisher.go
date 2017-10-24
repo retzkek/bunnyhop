@@ -211,16 +211,25 @@ publisherLoop:
 			originTag, found := p.messages[cf.DeliveryTag]
 			if found {
 				if cf.Ack {
+					log.WithFields(log.Fields{
+						"consumerTag":  originTag,
+						"publisherTag": cf.DeliveryTag,
+					}).Debug("publisher: got ack")
 					publisherAcks.Inc()
 					p.confirm <- originTag
 				} else {
 					log.WithFields(log.Fields{
-						"tag": originTag,
+						"consumerTag":  originTag,
+						"publisherTag": cf.DeliveryTag,
 					}).Warning("publisher: got nack")
 					publisherNacks.Inc()
 					p.reject <- originTag
-					delete(p.messages, cf.DeliveryTag)
 				}
+				delete(p.messages, cf.DeliveryTag)
+			} else {
+				log.WithFields(log.Fields{
+					"publisherTag": cf.DeliveryTag,
+				}).Debug("publisher: couldn't find consumer tag")
 			}
 		case r := <-p.outbox:
 			log.Debugf("publisher: got record: %s", string(r.Body))
