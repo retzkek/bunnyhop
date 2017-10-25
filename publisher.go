@@ -88,10 +88,9 @@ func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message
 			MinRetry:   viper.GetString("destination.minRetry"),
 			MaxRetry:   viper.GetString("destination.maxRetry"),
 		},
-		outbox:   outbox,
-		confirm:  confirm,
-		reject:   reject,
-		messages: make(map[uint64]uint64),
+		outbox:  outbox,
+		confirm: confirm,
+		reject:  reject,
 	}
 	if err := pub.Check(); err != nil {
 		return err
@@ -160,6 +159,8 @@ func (p *Publisher) Run(ctx context.Context) error {
 
 	// reset after successful connection
 	p.ResetRetry()
+	p.messages = make(map[uint64]uint64)
+	p.messageCount = 0
 
 publisherLoop:
 	for {
@@ -232,7 +233,7 @@ publisherLoop:
 				}).Debug("publisher: couldn't find consumer tag")
 			}
 		case r := <-p.outbox:
-			log.Debugf("publisher: got record: %s", string(r.Body))
+			//log.Debugf("publisher: got record: %s", string(r.Body))
 			if p.filterPass(r) {
 				log.Debug("publisher: publishing record")
 				publisherMessages.With(prometheus.Labels{"filter": "pass"}).Inc()
@@ -252,6 +253,10 @@ publisherLoop:
 					p.reject <- r.DeliveryTag
 				} else {
 					p.messageCount += 1
+					log.WithFields(log.Fields{
+						"consumerTag":  r.DeliveryTag,
+						"publisherTag": p.messageCount,
+					}).Debug("publisher: sent message")
 					p.messages[p.messageCount] = r.DeliveryTag
 				}
 			} else {
