@@ -40,6 +40,11 @@ var (
 	})
 )
 
+const (
+	// how long to wait before sending NACK for messages that haven't been confirmed or rejected
+	messageTimeout = 60 * time.Second
+)
+
 func init() {
 	prometheus.MustRegister(consumerStarts)
 	prometheus.MustRegister(consumerMessages)
@@ -49,9 +54,11 @@ func init() {
 
 type Consumer struct {
 	ConnectionConfig
-	outbox  chan Message
-	confirm chan uint64
-	reject  chan uint64
+	outbox   chan Message
+	confirm  chan uint64
+	reject   chan uint64
+	timeout  chan uint64
+	messages map[uint64]context.CancelFunc
 }
 
 func startConsumer(ctx context.Context, wg *sync.WaitGroup, outbox chan Message, confirm, reject chan uint64) error {
@@ -144,6 +151,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 
 	// reset after successful connection
 	c.ResetRetry()
+	c.timeout = make(chan uint64)
+	c.messages = make(map[uint64]context.CancelFunc)
 
 consumerLoop:
 	for {
@@ -168,24 +177,60 @@ consumerLoop:
 			}).Debug("closing consumer: channel closed")
 			return NewAMQPError("channel closed")
 		case r := <-c.confirm:
-			log.WithField("tag", r).Debug("consumer: sent ack")
-			cch.Ack(r, false)
-			consumerAcks.Inc()
-			// reset after successful send
-			c.ResetRetry()
+			if cancel, found := c.messages[r]; found {
+				consumerAcks.Inc()
+				// take out of message accounting
+				cancel()
+				delete(c.messages, r)
+				// send ACK
+				cch.Ack(r, false)
+				log.WithField("tag", r).Debug("consumer: sent ack")
+				// reset after successful send
+				c.ResetRetry()
+			} else {
+				log.WithField("tag", r).Warning("consumer: got confirm for unknown messge")
+			}
 		case r := <-c.reject:
-			// throttle nacks since they're probably just coming right back
-			sleep := c.BackoffRetry()
-			log.Infof("consumer: record rejected, waiting %s to send back to origin", sleep)
+			if cancel, found := c.messages[r]; found {
+				consumerNacks.Inc()
+				// take out of message accounting
+				cancel()
+				delete(c.messages, r)
+				// throttle nacks since they're probably just coming right back
+				sleep := c.BackoffRetry()
+				log.Infof("consumer: record rejected, waiting %s to send back to origin", sleep)
+				// wait for sleep duration unless our context is cancelled
+				ctx, cancel := context.WithTimeout(ctx, sleep)
+				<-ctx.Done()
+				cancel()
+				// send NACK
+				cch.Nack(r, false, true)
+				log.WithField("tag", r).Debug("consumer: sent nack")
+				// reset after successful send
+				c.ResetRetry()
+			} else {
+				log.WithField("tag", r).Warning("consumer: got reject for unknown messge")
+			}
+			cch.Nack(r, false, true)
+		case r := <-c.timeout:
+			// send nack for messages we haven't gotten a confirm or reject for after timeout
+			log.WithField("tag", r).Warning("consumer: sending nack for presumed lost message")
 			consumerNacks.Inc()
-			ctx, cancel := context.WithTimeout(ctx, sleep)
-			<-ctx.Done()
-			cancel()
-			log.WithField("tag", r).Debug("consumer: sent nack")
 			cch.Nack(r, false, true)
 		case r := <-inbox:
 			log.Debugf("got record %d", r.DeliveryTag)
 			consumerMessages.Inc()
+			// add message to accounting and spawn goroutine for timeout
+			ctxm, cancel := context.WithCancel(ctx)
+			c.messages[r.DeliveryTag] = cancel
+			go func(ctx context.Context) {
+				select {
+				case <-time.After(messageTimeout):
+					c.timeout <- r.DeliveryTag
+				case <-ctxm.Done():
+					return
+				}
+			}(ctxm)
 			// outbox should block until the message can be sent
 			select {
 			case c.outbox <- Message{
@@ -197,9 +242,14 @@ consumerLoop:
 			case <-ctx.Done():
 				log.Warning("consumer: returning unsent record")
 				r.Nack(false, true)
-				break consumerLoop
 			}
 		}
+	}
+	// send nacks for outstanding messages and cancel timout
+	for r, cancel := range c.messages {
+		consumerNacks.Inc()
+		cch.Nack(r, false, true)
+		cancel()
 	}
 	return nil
 }
