@@ -87,6 +87,9 @@ func startPublisher(ctx context.Context, wg *sync.WaitGroup, outbox chan Message
 			SkipVerify: viper.GetBool("destination.skipVerify"),
 			MinRetry:   viper.GetString("destination.minRetry"),
 			MaxRetry:   viper.GetString("destination.maxRetry"),
+			// prefetch doesn't make sense for the publisher, but we need
+			// to know how many messages the consumer could have outstanding
+			PrefetchCount: viper.GetInt("origin.qos.prefetchCount"),
 		},
 		outbox:  outbox,
 		confirm: confirm,
@@ -145,13 +148,13 @@ func (p *Publisher) Run(ctx context.Context) error {
 		return NewAMQPError("unable to open channel to destination RabbitMQ")
 	}
 	defer cch.Close()
-	chanClosing := cch.NotifyClose(make(chan *amqp.Error, 1))
-	returns := cch.NotifyReturn(make(chan amqp.Return))
+	chanClosing := cch.NotifyClose(make(chan *amqp.Error))
+	returns := cch.NotifyReturn(make(chan amqp.Return, p.PrefetchCount))
 	if err = cch.Confirm(false); err != nil {
 		log.Debug(err)
 		return NewAMQPError("RabbitMQ channel could not be put into confirm mode")
 	}
-	confirms := cch.NotifyPublish(make(chan amqp.Confirmation))
+	confirms := cch.NotifyPublish(make(chan amqp.Confirmation, p.PrefetchCount))
 
 	if err := setupPublisherExchange(cch); err != nil {
 		return err
