@@ -139,7 +139,9 @@ func (p *Publisher) Run(ctx context.Context) error {
 		return NewAMQPError("unable to connect to destination RabbitMQ")
 	}
 	defer conn.Close()
-	connClosing := conn.NotifyClose(make(chan *amqp.Error))
+	// possible race condition in close notification channels
+	// https://github.com/streadway/amqp/issues/348
+	connClosing := conn.NotifyClose(make(chan *amqp.Error, 1))
 	blockings := conn.NotifyBlocked(make(chan amqp.Blocking))
 
 	cch, err := conn.Channel()
@@ -148,7 +150,7 @@ func (p *Publisher) Run(ctx context.Context) error {
 		return NewAMQPError("unable to open channel to destination RabbitMQ")
 	}
 	defer cch.Close()
-	chanClosing := cch.NotifyClose(make(chan *amqp.Error))
+	chanClosing := cch.NotifyClose(make(chan *amqp.Error, 1))
 	returns := cch.NotifyReturn(make(chan amqp.Return, p.PrefetchCount))
 	if err = cch.Confirm(false); err != nil {
 		log.Debug(err)

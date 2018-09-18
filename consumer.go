@@ -119,7 +119,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 		return NewAMQPError("unable to connect to origin RabbitMQ")
 	}
 	defer conn.Close()
-	connClosing := conn.NotifyClose(make(chan *amqp.Error))
+	// possible race condition in close notification channels
+	// https://github.com/streadway/amqp/issues/348
+	connClosing := conn.NotifyClose(make(chan *amqp.Error, 1))
 
 	cch, err := conn.Channel()
 	if err != nil {
@@ -151,7 +153,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 
 	// reset after successful connection
 	c.ResetRetry()
-	c.timeout = make(chan uint64)
+	c.timeout = make(chan uint64, c.PrefetchCount)
 	c.messages = make(map[uint64]context.CancelFunc)
 
 consumerLoop:
